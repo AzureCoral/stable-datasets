@@ -16,7 +16,7 @@ class CIFAR100(Dataset):
     The 100 classes in the CIFAR-100 are grouped into 20 superclasses. Each
     image comes with a "fine" label(the class to which it belongs) and a
     "coarse" label(the superclass to which it belongs)."""
- 
+
     @property
     def label_to_name(label):
         labels_list = [
@@ -124,33 +124,33 @@ class CIFAR100(Dataset):
 
     @property
     def urls(self):
-        return {"cifar100.tar.gz": "https://www.cs.toronto.edu/~kriz/cifar-100-python.tar.gz"}
+        return {
+            "cifar100.tar.gz": "https://www.cs.toronto.edu/~kriz/cifar-100-python.tar.gz"
+        }
 
     @property
     def image_shape(self):
         return (3, 32, 32)
-    
+
     def load(self):
-    
-    
         t0 = time.time()
         # Loading the file
         tar = tarfile.open(self.path / self.name / list(self.urls.keys())[0], "r:gz")
-    
+
         # Loading training set
         f = tar.extractfile("cifar-100-python/train").read()
         data = pickle.loads(f, encoding="latin1")
         train_images = data["data"].reshape((-1, 3, 32, 32))
         train_fine = np.array(data["fine_labels"])
         train_coarse = np.array(data["coarse_labels"])
-    
+
         # Loading test set
         f = tar.extractfile("cifar-100-python/test").read()
         data = pickle.loads(f, encoding="latin1")
         test_images = data["data"].reshape((-1, 3, 32, 32))
         test_fine = np.array(data["fine_labels"])
         test_coarse = np.array(data["coarse_labels"])
-    
+
         self["train_X"] = np.transpose(train_images, (0, 2, 3, 1))
         self["train_y"] = train_fine
         self["train_y_coarse"] = train_coarse
@@ -158,7 +158,6 @@ class CIFAR100(Dataset):
         self["test_y"] = test_fine
         self["test_y_coarse"] = test_coarse
         print("Dataset cifar100 loaded in {0:.2f}s.".format(time.time() - t0))
-
 
 
 class CIFAR100C(CIFAR100):
@@ -199,70 +198,74 @@ class CIFAR100C(CIFAR100):
 
     @property
     def corruptions(self):
-        return ["zoom_blur",
-                "speckle_noise",
-                "spatter",
-                "snow",
-                "shot_noise",
-                "saturate",
-                "pixelate",
-                "motion_blur",
-                "jpeg_compression",
-                "impulse_noise",
-                "glass_blur",
-                "gaussian_noise",
-                "gaussian_blur",
-                "frost",
-                "fog",
-                "elastic_transform",
-                "defocus_blur",
-                "contrast",
-                "bightness",
-                ]
-
+        return [
+            "zoom_blur",
+            "speckle_noise",
+            "spatter",
+            "snow",
+            "shot_noise",
+            "saturate",
+            "pixelate",
+            "motion_blur",
+            "jpeg_compression",
+            "impulse_noise",
+            "glass_blur",
+            "gaussian_noise",
+            "gaussian_blur",
+            "frost",
+            "fog",
+            "elastic_transform",
+            "defocus_blur",
+            "contrast",
+            "bightness",
+        ]
 
     @property
     def urls(self):
         return {
-        "CIFAR-100-C.tar": "https://zenodo.org/records/3555552/files/CIFAR-100-C.tar?download=1"
+            "CIFAR-100-C.tar": "https://zenodo.org/records/3555552/files/CIFAR-100-C.tar?download=1"
         }
 
     @property
     def md5(self):
-        return {"CIFAR-100-C.tar":"11f0ed0f1191edbf9fa23466ae6021d3"}
+        return {"CIFAR-100-C.tar": "11f0ed0f1191edbf9fa23466ae6021d3"}
 
     @property
     def webpage(self):
         return "https://zenodo.org/records/3555552"
 
-    def load(self):
+    def load(self, corruption=None):
         t0 = time.time()
-    
+
         tar = tarfile.open(self.path / self.name / "CIFAR-100-C.tar", "r")
-    
+
         # Load train set
         array_file = BytesIO()
         array_file.write(tar.extractfile("CIFAR-100-C/labels.npy").read())
         array_file.seek(0)
         labels = np.load(array_file)
-        if type(self.corruption) == str:
-            corruptions = [self.corruption]
+        if type(corruption) == str:
+            corruptions = [corruption]
+        elif type(corruption) in [list, tuple]:
+            corruptions = corruption
         else:
-            corruptions = self.corruption
+            corruptions = self.corruptions
         images = []
         names = []
         for c in corruptions:
             assert c in self.corruptions
+            print(f"Loading corruption {c}")
             array_file = BytesIO()
             array_file.write(tar.extractfile(f"CIFAR-100-C/{c}.npy").read())
             array_file.seek(0)
             images.append(np.load(array_file))
             names.extend([c] * 10000)
-    
-        self["X"] =  np.concatenate(images).transpose((0, 2, 3, 1))
-        self["y"] =  np.concatenate([labels for i in range(len(corruptions))])
+
+        self["X"] = np.concatenate(images).transpose((0, 2, 3, 1))
+        self["y"] = np.concatenate([labels for i in range(len(corruptions))])
         self["corruption_name"] = np.array(names)
-        self["corruption_level"] = np.arange(1,6).repeat(10000).repeat(len(corruptions))
+        self["corruption_level"] = (
+            np.arange(1, 6).repeat(10000).repeat(len(corruptions))
+        )
         print("Dataset cifar100-C loaded in{0:.2f}s.".format(time.time() - t0))
-
-
+        return self

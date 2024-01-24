@@ -9,7 +9,7 @@ from sklearn.preprocessing import LabelEncoder
 from PIL import Image
 
 
-class TinyImagenet(Dataset):
+class AWA2(Dataset):
     """
     Tiny Imagenet has 200 classes. Each class has 500 training images, 50
     validation images, and 50 test images. We have released the training and
@@ -23,22 +23,23 @@ class TinyImagenet(Dataset):
     @property
     def urls(self):
         return {
-            "tiny-imagenet-200.zip": "http://cs231n.stanford.edu/tiny-imagenet-200.zip"
+            "AwA2-base.zip": "https://cvml.ista.ac.at/AwA2/AwA2-base.zip",
+            "AwA2-data.zip": "https://cvml.ista.ac.at/AwA2/AwA2-data.zip",
         }
 
     @property
     def md5(self):
-        return {"tiny-imagenet-200.zip": "90528d7ca1a48142e341f4ef8d21d0de"}
-
-    @property
-    def image_shape(self):
-        return (3, 64, 64)
+        return {
+            "AwA2-base.zip": "90528d7ca1a48142e341f4ef8d21d0de",
+            "AwA2-data.zip": "90528d7ca1a48142e341f4ef8d21d0de",
+        }
 
     @property
     def num_classes(self):
-        return 200
+        return 50
 
     def load(self):
+        asdf
         # Loading the file
         f = ZipFile(self.path / self.name / "tiny-imagenet-200.zip", "r")
         names = [name for name in f.namelist() if name.endswith("JPEG")]
@@ -68,58 +69,3 @@ class TinyImagenet(Dataset):
         self["train_y"] = labels.transform(y_train)
         self["test_X"] = x_valid
         self["test_y"] = labels.transform(y_valid)
-
-
-class TinyImagenetC(TinyImagenet):
-    @property
-    def urls(self):
-        return {
-            "Tiny-ImageNet-C.tar": "https://zenodo.org/records/2536630/files/Tiny-ImageNet-C.tar?download=1"
-        }
-
-    @property
-    def webpage(self):
-        return "https://zenodo.org/records/2536630"
-
-    @property
-    def corruptions(self):
-        return [
-            "zoom_blur",
-            "snow",
-            "shot_noise",
-            "pixelate",
-            "motion_blur",
-            "jpeg_compression",
-            "impulse_noise",
-            "glass_blur",
-            "gaussian_noise",
-            "frost",
-            "fog",
-            "elastic_transform",
-            "defocus_blur",
-            "contrast",
-            "brightness",
-        ]
-
-    def load(self, corruption=None):
-        # Loading the file
-        f = tarfile.open(self.path / self.name / "Tiny-ImageNet-C.tar", "r")
-        names = [name.name for name in f.getmembers() if name.name.endswith("JPEG")]
-        if type(corruption) == str:
-            corruptions = [corruption]
-        elif type(corruption) in [list, tuple]:
-            corruptions = corruption
-        else:
-            corruptions = self.corruptions
-
-        names = [n for n in names if n.split("/")[1] in corruptions]
-        x, y, level, corruption = [], [], [], []
-        for name in tqdm(names, desc=f"Loading {self.name}"):
-            x.append(Image.open(BytesIO(f.extractfile(name).read())).convert("RGB"))
-            y.append(name.split("/")[3])
-            level.append(name.split("/")[2])
-            corruption.append(name.split("/")[1])
-        self["X"] = x
-        self["y"] = y
-        self["level"] = level
-        self["corruption_name"] = corruption

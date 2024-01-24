@@ -20,12 +20,13 @@ import torch as ch
 from typing import Dict, Union
 from PIL import Image
 
+
 class ImagePathsDataset(list):
     def __getitem__(self, i):
         return Image.open(list.__getitem__(self, i)).convert("RGB")
 
-class Dataset(dict):
 
+class Dataset(dict):
     def __init__(self, path, **kwargs):
         self._path = Path(path)
         for k, v in kwargs.items():
@@ -57,17 +58,18 @@ class Dataset(dict):
 
     def __getitem__(self, key):
         if key not in self:
-            raise ValueError(f"{key} not present.... did you download/load the dataset first?")
+            raise ValueError(
+                f"{key} not present.... did you download/load the dataset first?"
+            )
         return super().__getitem__(key)
-
 
     def download(self):
         download_dataset(self.name, self.urls, path=self.path, extract=self.extract)
+        return self
 
     @property
     def load(self):
         raise NotImplementedError("You need to define your own load method")
-
 
 
 def as_tuple(x, N, t=None):
@@ -481,7 +483,7 @@ class _DownloadProgressBar(tqdm):
         self.update(b * bsize - self.n)
 
 
-def _download_url(url: str, filename: str, md5_checksum : str = None):
+def _download_url(url: str, filename: str, md5_checksum: str = None):
     if "drive.google.com" in url:
         import gdown
 
@@ -494,17 +496,21 @@ def _download_url(url: str, filename: str, md5_checksum : str = None):
     if target.is_file():
         start = target.stat().st_size
         if md5_checksum is not None:
-            current = hashlib.md5(open(target,'rb').read()).hexdigest()
+            current = hashlib.md5(open(target, "rb").read()).hexdigest()
             if current == md5_checksum:
                 return
     else:
         start = 0
-    resume_header = {'Range': f"bytes={start}-"}
-    r = requests.get(url, headers=resume_header, stream=True,  verify=False, allow_redirects=True)
-    file_size = int(r.headers.get('Content-Length', 0))
+    resume_header = {"Range": f"bytes={start}-"}
+    r = requests.get(
+        url, headers=resume_header, stream=True, verify=False, allow_redirects=True
+    )
+    file_size = int(r.headers.get("Content-Length", 0))
 
     if file_size == start:
-        print(f"File {filename} was already downloaded from URL {url} and has right size")
+        print(
+            f"File {filename} was already downloaded from URL {url} and has right size"
+        )
     elif start > file_size:
         print("File is bigger than expected...")
 
@@ -515,7 +521,7 @@ def _download_url(url: str, filename: str, md5_checksum : str = None):
             with target.open("wb" if start == 0 else "ab") as f:
                 shutil.copyfileobj(r_raw, f)
     if md5_checksum is None:
-        current = hashlib.md5(open(target,'rb').read()).hexdigest()
+        current = hashlib.md5(open(target, "rb").read()).hexdigest()
         print("A md5 checksum was not provided, for future use please use")
         print(f"{current} for file {target}")
 
@@ -555,7 +561,7 @@ def download_dataset(
     for filename, url in name_to_url.items():
         file_path = folder / filename
         print("\t...Downloading {}".format(filename))
-        if True:#not file_path.exists():
+        if True:  # not file_path.exists():
             _download_url(url, file_path)
         else:
             # we assume that the correct extraction process was done
@@ -567,10 +573,9 @@ def download_dataset(
             extract_file(file_path, to)
 
 
-
 def track_progress(members, total):
     for member in tqdm(members, total=total, desc="Extracting..."):
-      yield member
+        yield member
 
 
 def extract_file(filename, target):
@@ -581,8 +586,8 @@ def extract_file(filename, target):
         return
     if ext in [".tgz", ".tar"] or str(filename)[-7:] == ".tar.gz":
         tgz = ext == ".tgz" or str(filename)[-7:] == ".tar.gz"
-        with tarfile.open(filename, 'r:gz' if tgz else "r") as tarball:
-           tarball.extractall(path=target, members = track_progress(tarball, None))
+        with tarfile.open(filename, "r:gz" if tgz else "r") as tarball:
+            tarball.extractall(path=target, members=track_progress(tarball, None))
     elif ext == ".zip":
         with zipfile.ZipFile(filename) as zip_file:
             for member in tqdm(zip_file.namelist(), desc="Extracting "):
@@ -1190,35 +1195,34 @@ def base_two(x: ch.Tensor, bits: int):
         return x.view(-1, 1).bitwise_and(mask).ne_(0).byte()
 
 
+class TensorDataset(Dataset):
+    def __init__(self, X, y, transform=None):
+        self.X = X
+        self.y = y
+        self.transform = transform
+
+    def __getitem__(self, index):
+        X, y = self.X[index], self.y[index]
+        if self.transform:
+            X = self.transform(X)
+        return X, y
+
+    def __len__(self):
+        return len(self.X)
+
+
 def dataset_to_lightning(
-    fn,
-    path,
-    batch_size,
+    train,
+    val=None,
+    test=None,
     num_workers=0,
     create_val=0,
     train_transform=None,
     val_transform=None,
+    test_transform=None,
+    **kwargs,
 ):
     import lightning.pytorch as pl
-    import torch
-    from torch.utils.data import TensorDataset, DataLoader, random_split, Dataset
-    from torchvision import datasets
-    from torchvision.transforms import ToTensor
-
-    class MyDataset(Dataset):
-        def __init__(self, X, y, transform=None):
-            self.X = X
-            self.y = y
-            self.transform = transform
-
-        def __getitem__(self, index):
-            X, y = self.X[index], self.y[index]
-            if self.transform:
-                X = self.transform(X)
-            return X, y
-
-        def __len__(self):
-            return len(self.X)
 
     class DataModule(pl.LightningDataModule):
         def __init__(
@@ -1228,8 +1232,6 @@ def dataset_to_lightning(
             batch_size,
             create_val,
             num_workers,
-            train_transform=None,
-            val_transform=None,
         ):
             super().__init__()
             self.fn = fn
@@ -1239,6 +1241,7 @@ def dataset_to_lightning(
             self.num_workers = num_workers
             self.train_transform = train_transform
             self.val_transform = val_transform
+            self.test_transform = test_transform
 
         def setup(self, stage: str):
             if hasattr(self, "train"):
@@ -1249,7 +1252,7 @@ def dataset_to_lightning(
                 dataset["train"]["y"],
                 transform=self.train_transform,
             )
-            if "val" in dataset.keys():
+            if val:
                 self.val = MyDataset(
                     dataset["val"]["X"],
                     dataset["val"]["y"],
