@@ -56,6 +56,10 @@ class CIFAR10(Dataset):
         return 10
 
     @property
+    def image_shape(self):
+        return (32, 32, 3)
+
+    @property
     def label_to_name(self, label):
         return {
             0: "airplane",

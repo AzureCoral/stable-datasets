@@ -129,12 +129,16 @@ class CIFAR100(Dataset):
         }
 
     @property
+    def md5(self):
+        return {"cifar100.tar.gz": "aae3fc27dfb7226b82b61d19a3d25783"}
+
+    @property
     def num_classes(self):
         return 100
 
     @property
     def image_shape(self):
-        return (3, 32, 32)
+        return (32, 32, 3)
 
     def load(self):
         t0 = time.time()
@@ -162,6 +166,7 @@ class CIFAR100(Dataset):
         self["test_y"] = test_fine
         self["test_y_coarse"] = test_coarse
         print("Dataset cifar100 loaded in {0:.2f}s.".format(time.time() - t0))
+        return self
 
 
 class CIFAR100C(CIFAR100):

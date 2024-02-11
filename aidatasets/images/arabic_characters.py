@@ -1,37 +1,12 @@
-import os
 import numpy as np
-from ..utils import download_dataset
-import time
 import io
 from tqdm import tqdm
 import matplotlib.image as mpimg
 from zipfile import ZipFile
+from ..utils import Dataset
 
 
-_source = "https://github.com/mloey/Arabic-Handwritten-Characters-Dataset"
-
-cite = """
-@article{el2017arabic,
-  title={Arabic handwritten characters recognition using convolutional neural network},
-  author={El-Sawy, Ahmed and Loey, Mohamed and El-Bakry, Hazem},
-  journal={WSEAS Transactions on Computer Research},
-  volume={5},
-  pages={11--19},
-  year={2017}
-}"""
-
-_name = "arabic_characters"
-
-_urls = {
-    "TestImages32x32.zip": "https://github.com/mloey/Arabic-Handwritten-Characters-Dataset/raw/master/Test%20Images%203360x32x32.zip",
-    "TrainImages32x32.zip": "https://github.com/mloey/Arabic-Handwritten-Characters-Dataset/raw/master/Train%20Images%2013440x32x32.zip",
-}
-
-SHAPE = (1, 32, 32)
-N_SAMPLES = 13440
-
-
-def load(path=None):
+class ArabicCharacters(Dataset):
     """Arabic Handwritten Characters Dataset
 
     Astract
@@ -68,39 +43,60 @@ def load(path=None):
 
     """
 
-    t0 = time.time()
-    download_dataset(_name, _urls, path=path)
-    train_images = []
-    test_images = []
-    train_labels = []
-    test_labels = []
-    with ZipFile(os.path.join(path, _name, "TestImages32x32.zip")) as archive:
-        for entry in tqdm(archive.infolist()):
-            if ".png" not in entry.filename:
-                continue
-            content = archive.read(entry)
-            test_images.append(mpimg.imread(io.BytesIO(content), "png"))
-            test_labels.append(int(entry.filename.split("_")[-1][:-4]))
+    _source = "https://github.com/mloey/Arabic-Handwritten-Characters-Dataset"
 
-    with ZipFile(os.path.join(path, _name, "TrainImages32x32.zip")) as archive:
-        for entry in tqdm(archive.infolist()):
-            if ".png" not in entry.filename:
-                continue
-            content = archive.read(entry)
-            train_images.append(mpimg.imread(io.BytesIO(content), "png"))
-            train_labels.append(int(entry.filename.split("_")[-1][:-4]))
+    cite = """
+    @article{el2017arabic,
+    title={Arabic handwritten characters recognition using convolutional neural network},
+    author={El-Sawy, Ahmed and Loey, Mohamed and El-Bakry, Hazem},
+    journal={WSEAS Transactions on Computer Research},
+    volume={5},
+    pages={11--19},
+    year={2017}
+    }"""
 
-    dataset = {
-        "train": {
-            "X": np.array(train_images)[..., None].astype("float32"),
-            "y": np.array(train_labels).astype("int"),
-        },
-        "val": {
-            "X": np.array(test_images)[..., None].astype("float32"),
-            "y": np.array(test_labels).astype("int"),
-        },
-    }
+    @property
+    def md5(self):
+        return {
+            "TestImages32x32.zip": "71b492694895e3c39660d023c077779c",
+            "TrainImages32x32.zip": "a4b80c95fc07ff69d219daa58cf71a34",
+        }
 
-    print("Dataset amnist loaded in {0:.2f}s.".format(time.time() - t0))
+    @property
+    def urls(self):
+        return {
+            "TestImages32x32.zip": "https://github.com/mloey/Arabic-Handwritten-Characters-Dataset/raw/master/Test%20Images%203360x32x32.zip",
+            "TrainImages32x32.zip": "https://github.com/mloey/Arabic-Handwritten-Characters-Dataset/raw/master/Train%20Images%2013440x32x32.zip",
+        }
 
-    return dataset
+    @property
+    def image_shape(self):
+        return (28, 28, 1)
+
+    def load(self):
+
+        train_images = []
+        test_images = []
+        train_labels = []
+        test_labels = []
+        with ZipFile(self.path / self.name / "TestImages32x32.zip") as archive:
+            for entry in tqdm(archive.infolist()):
+                if ".png" not in entry.filename:
+                    continue
+                content = archive.read(entry)
+                test_images.append(mpimg.imread(io.BytesIO(content), "png"))
+                test_labels.append(int(entry.filename.split("_")[-1][:-4]))
+
+        with ZipFile(self.path / self.name / "TrainImages32x32.zip") as archive:
+            for entry in tqdm(archive.infolist()):
+                if ".png" not in entry.filename:
+                    continue
+                content = archive.read(entry)
+                train_images.append(mpimg.imread(io.BytesIO(content), "png"))
+                train_labels.append(int(entry.filename.split("_")[-1][:-4]))
+
+        self["train_X"] = np.array(train_images)[..., None]
+        self["train_y"] = np.array(train_labels)
+        self["test_X"] = np.array(test_images)[..., None]
+        self["test_X"] = np.array(test_labels)
+        return self

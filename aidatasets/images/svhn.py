@@ -41,41 +41,45 @@ class SVHN(Dataset):
 
     """
 
-
     @property
     def urls(self):
         return {
-    "train_32x32.mat": "http://ufldl.stanford.edu/housenumbers/train_32x32.mat",
-    "test_32x32.mat": "http://ufldl.stanford.edu/housenumbers/test_32x32.mat",
-}
+            "train_32x32.mat": "http://ufldl.stanford.edu/housenumbers/train_32x32.mat",
+            "test_32x32.mat": "http://ufldl.stanford.edu/housenumbers/test_32x32.mat",
+        }
+
+    @property
+    def md5(self):
+        return {
+            "train_32x32.mat": "e26dedcc434d2e4c54c9b2d4a06d8373",
+            "test_32x32.mat": "eb5a983be6a315427106f1b164d9cef3",
+        }
 
     @property
     def image_shape(self):
-        return (3,32,32)
-
-
+        return (3, 32, 32)
 
     def load(self):
-    
+
         # Load the dataset (download if necessary) and set
         # the class attributess.
         print("Loading svhn")
-    
+
         t0 = time.time()
-    
+
         # Train set
-        data = sio.loadmat(self.path/self.name / "train_32x32.mat")
+        data = sio.loadmat(self.path / self.name / "train_32x32.mat")
         train_images = data["X"].transpose([3, 0, 1, 2])
         train_labels = np.squeeze(data["y"]) - 1
-    
+
         # Test set
         data = sio.loadmat(self.path / self.name / "test_32x32.mat")
         test_images = data["X"].transpose([3, 0, 1, 2])
         test_labels = np.squeeze(data["y"]) - 1
-    
+
         print("Dataset svhn loaded in", "{0:.2f}".format(time.time() - t0), "s.")
         self["train_X"] = np.array(train_images)
         self["train_y"] = np.array(train_labels)
         self["test_X"] = np.array(test_images)
         self["test_y"] = np.array(test_labels)
-    
+        return self
