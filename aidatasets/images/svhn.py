@@ -57,7 +57,7 @@ class SVHN(Dataset):
 
     @property
     def image_shape(self):
-        return (3, 32, 32)
+        return (32, 32, 3)
 
     def load(self):
 

@@ -564,6 +564,9 @@ def track_progress(members, total):
 
 
 def extract_file(filename, target):
+    if os.path.isfile(str(target) + ".done"):
+        print("already extracted")
+        return
     ext = pathlib.Path(filename).suffix
     try:
         os.open(str(target) + ".lock", os.O_CREAT | os.O_EXCL)
@@ -583,6 +586,7 @@ def extract_file(filename, target):
                         continue
                     zip_file.extract(member, target)
         os.remove(str(target) + ".lock")
+        os.open(str(target) + ".done", os.O_CREAT)
     except Exception as e:
         print(e)
         while os.path.isfile(str(target) + ".lock"):

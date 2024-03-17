@@ -130,7 +130,7 @@ class CIFAR100(Dataset):
 
     @property
     def md5(self):
-        return {"cifar100.tar.gz": "aae3fc27dfb7226b82b61d19a3d25783"}
+        return {"cifar100.tar.gz": "eb9058c3a382ffc7106e4002c42a8d85"}
 
     @property
     def num_classes(self):

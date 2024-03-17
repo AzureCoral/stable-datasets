@@ -68,6 +68,7 @@ class TinyImagenet(Dataset):
         self["train_y"] = labels.transform(y_train)
         self["test_X"] = x_valid
         self["test_y"] = labels.transform(y_valid)
+        return self
 
 
 class TinyImagenetC(TinyImagenet):

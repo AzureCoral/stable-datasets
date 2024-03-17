@@ -32,7 +32,7 @@ class FashionMNIST(Dataset):
     @property
     def md5(self):
         return {
-            "train-images.gz": "8d4fb7e6c68d591d4c3dfef9ec88bf0dz",
+            "train-images.gz": "8d4fb7e6c68d591d4c3dfef9ec88bf0d",
             "train-labels.gz": "25c81989df183df01b3e8a0aad5dffbe",
             "test-images.gz": "bef4ecab320f06d8554ea6380940ec79",
             "test-labels.gz": "bb300cfdad3c16e7a12a480ee83cd310",
