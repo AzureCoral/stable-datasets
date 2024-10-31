@@ -1,109 +1,157 @@
-import os
-import pickle
-import tarfile
-import time
-from ..utils import Dataset
-from PIL import Image
-
 import numpy as np
-from tqdm import tqdm
-from sklearn.preprocessing import LabelEncoder
+import datasets
+from pathlib import Path
+
+_CLASSES = [
+    "apple_pie",
+    "baby_back_ribs",
+    "baklava",
+    "beef_carpaccio",
+    "beef_tartare",
+    "beet_salad",
+    "beignets",
+    "bibimbap",
+    "bread_pudding",
+    "breakfast_burrito",
+    "bruschetta",
+    "caesar_salad",
+    "cannoli",
+    "caprese_salad",
+    "carrot_cake",
+    "ceviche",
+    "cheesecake",
+    "cheese_plate",
+    "chicken_curry",
+    "chicken_quesadilla",
+    "chicken_wings",
+    "chocolate_cake",
+    "chocolate_mousse",
+    "churros",
+    "clam_chowder",
+    "club_sandwich",
+    "crab_cakes",
+    "creme_brulee",
+    "croque_madame",
+    "cup_cakes",
+    "deviled_eggs",
+    "donuts",
+    "dumplings",
+    "edamame",
+    "eggs_benedict",
+    "escargots",
+    "falafel",
+    "filet_mignon",
+    "fish_and_chips",
+    "foie_gras",
+    "french_fries",
+    "french_onion_soup",
+    "french_toast",
+    "fried_calamari",
+    "fried_rice",
+    "frozen_yogurt",
+    "garlic_bread",
+    "gnocchi",
+    "greek_salad",
+    "grilled_cheese_sandwich",
+    "grilled_salmon",
+    "guacamole",
+    "gyoza",
+    "hamburger",
+    "hot_and_sour_soup",
+    "hot_dog",
+    "huevos_rancheros",
+    "hummus",
+    "ice_cream",
+    "lasagna",
+    "lobster_bisque",
+    "lobster_roll_sandwich",
+    "macaroni_and_cheese",
+    "macarons",
+    "miso_soup",
+    "mussels",
+    "nachos",
+    "omelette",
+    "onion_rings",
+    "oysters",
+    "pad_thai",
+    "paella",
+    "pancakes",
+    "panna_cotta",
+    "peking_duck",
+    "pho",
+    "pizza",
+    "pork_chop",
+    "poutine",
+    "prime_rib",
+    "pulled_pork_sandwich",
+    "ramen",
+    "ravioli",
+    "red_velvet_cake",
+    "risotto",
+    "samosa",
+    "sashimi",
+    "scallops",
+    "seaweed_salad",
+    "shrimp_and_grits",
+    "spaghetti_bolognese",
+    "spaghetti_carbonara",
+    "spring_rolls",
+    "steak",
+    "strawberry_shortcake",
+    "sushi",
+    "tacos",
+    "takoyaki",
+    "tiramisu",
+    "tuna_tartare",
+    "waffles",
+]
 
 
-class Food101(Dataset):
-    """Image classification."""
+class Food101(datasets.GeneratorBasedBuilder):
+    """TODO: Short description of my dataset."""
 
-    @property
-    def urls(self):
-        return {"food-101.tar.gz": "http://data.vision.ee.ethz.ch/cvl/food-101.tar.gz"}
+    VERSION = datasets.Version("1.0.0")
 
-    @property
-    def extract(self):
-        return ["food-101.tar.gz"]
-
-    @property
-    def num_classes(self):
-        return 101
-
-    @property
-    def label_to_name(self, label):
-        return self.loaded_names[label]
-
-    @property
-    def name(self):
-        return "Food101"
-
-    @property
-    def webpage(self):
-        return "https://data.vision.ee.ethz.ch/cvl/datasets_extra/food-101/"
-
-    @property
-    def cite(self):
-        return """@inproceedings{bossard14,
-title = {Food-101 -- Mining Discriminative Components with Random Forests},
-author = {Bossard, Lukas and Guillaumin, Matthieu and Van Gool, Luc},
-booktitle = {European Conference on Computer Vision},
-year = {2014}
-}"""
-
-    def load(self):
-        t0 = time.time()
-
-        tar = tarfile.open(self.path / self.name / list(self.urls.keys())[0], "r:gz")
-
-        print("Loading labels")
-        self["labels"] = (
-            (self.path / self.name / "extracted_food-101.tar/food-101/meta/labels.txt")
-            .read_text()
-            .splitlines()
+    def _info(self):
+        features = datasets.Features(
+            {"image": datasets.Image(), "class": datasets.ClassLabel(names=_CLASSES)}
         )
-        self["classes"] = (
-            (self.path / self.name / "extracted_food-101.tar/food-101/meta/classes.txt")
-            .read_text()
-            .splitlines()
+
+        homepage = "https://data.vision.ee.ethz.ch/cvl/datasets_extra/food-101/"
+        license = "Unknown"
+        return datasets.DatasetInfo(
+            description="""This is the Food 101 dataset, also available from https://www.vision.ee.ethz.ch/datasets_extra/food-101/
+
+It contains images of food, organized by type of food. It was used in the Paper "Food-101 – Mining Discriminative Components with Random Forests" by Lukas Bossard, Matthieu Guillaumin and Luc Van Gool. It's a good (large dataset) for testing computer vision techniques.""",
+            features=features,
+            supervised_keys=("image", "shape"),
+            homepage=homepage,
+            license=license,
         )
 
-        print("Loading train info")
-        train = (
-            (self.path / self.name / "extracted_food-101.tar/food-101/meta/train.txt")
-            .read_text()
-            .splitlines()
+    def _split_generators(self, dl_manager):
+
+        archive = dl_manager.download_and_extract(
+            "http://data.vision.ee.ethz.ch/cvl/food-101.tar.gz"
         )
-        print("Loading test info")
-        test = (
-            (self.path / self.name / "extracted_food-101.tar/food-101/meta/test.txt")
-            .read_text()
-            .splitlines()
-        )
+        archive = Path(archive)
+        train = (archive / "food-101/meta/train.txt").read_text().splitlines()
+        test = (archive / "food-101/meta/test.txt").read_text().splitlines()
+        return [
+            datasets.SplitGenerator(
+                name=datasets.Split.TRAIN,
+                gen_kwargs={"root": archive, "archives": train},
+            ),
+            datasets.SplitGenerator(
+                name=datasets.Split.TEST,
+                gen_kwargs={"root": archive, "archives": test},
+            ),
+        ]
 
-        # Load train set
-        train_images = list()
-        train_labels = list()
-        for name in tqdm(train, desc="Loading Train Food101", ascii=True):
-            train_images.append(
-                self.path
-                / self.name
-                / f"extracted_food-101.tar/food-101/images/{name}.jpg"
-            )
-            train_labels.append(name.split("/")[0])
-
-        label_encoder = LabelEncoder().fit(train_labels)
-        train_labels = label_encoder.transform(train_labels)
-
-        # Load test set
-        test_images = list()
-        test_labels = list()
-        for name in tqdm(test, desc="Loading Test Food101", ascii=True):
-            test_images.append(
-                self.path
-                / self.name
-                / f"extracted_food-101.tar/food-101/images/{name}.jpg"
-            )
-            test_labels.append(name.split("/")[0])
-
-        test_labels = label_encoder.transform(test_labels)
-        self["train_X"] = ImagePathsDataset(train_images)
-        self["train_y"] = train_labels
-        self["test_X"] = ImagePathsDataset(test_images)
-        self["test_y"] = test_labels
-        print("Dataset Food101 loaded in{0:.2f}s.".format(time.time() - t0))
+    # method parameters are unpacked from `gen_kwargs` as given in `_split_generators`
+    def _generate_examples(self, root, archives):
+        for key, name in enumerate(archives):
+            yield key, {
+                "image": str(root / f"/food-101/images/{name}.jpg"),
+                "class": name.split("/")[0],
+            }
