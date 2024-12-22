@@ -1,72 +1,84 @@
-import os
-import pickle
-import tarfile
-import time
-from ..utils import Dataset
-from io import BytesIO
+import datasets
 from PIL import Image
-import numpy as np
-from tqdm import tqdm
-from sklearn.preprocessing import LabelEncoder
+import os
 
 
-class FGVCAircraft(Dataset):
-    """Image classification."""
+class FGVCAircraft(datasets.GeneratorBasedBuilder):
+    """FGVC Aircraft Dataset."""
 
-    @property
-    def urls(self):
-        return {
-            "fgvc-aircraft-2013b.tar.gz": "https://www.robots.ox.ac.uk/~vgg/data/fgvc-aircraft/archives/fgvc-aircraft-2013b.tar.gz"
-        }
+    VERSION = datasets.Version("1.0.0")
 
-    @property
-    def extract(self):
-        return ["fgvc-aircraft-2013b.tar.gz"]
-
-    @property
-    def num_classes(self):
-        return 102
-
-    @property
-    def webpage(self):
-        return "https://www.robots.ox.ac.uk/~vgg/data/fgvc-aircraft/"
-
-    def load(self):
-        t0 = time.time()
-        base = (
-            self.path
-            / self.name
-            / "extracted_fgvc-aircraft-2013b.tar/fgvc-aircraft-2013b/data"
+    def _info(self):
+        return datasets.DatasetInfo(
+            description="The FGVC Aircraft dataset for fine-grained visual categorization.",
+            features=datasets.Features(
+                {
+                    "image": datasets.Image(),
+                    "variant": datasets.ClassLabel(names=self._labels())
+                }
+            ),
+            supervised_keys=("image", "variant"),
+            homepage="https://www.robots.ox.ac.uk/~vgg/data/fgvc-aircraft/",
+            citation="""@article{maji2013fgvc,
+                         title={Fine-Grained Visual Classification of Aircraft},
+                         author={Maji, Subhransu and Rahtu, Esa and Kannala, Juho and Blaschko, Matthew and Vedaldi, Andrea},
+                         journal={arXiv preprint arXiv:1306.5151},
+                         year={2013}}"""
         )
-        for n, m in zip(
-            ["variant", "manufacturer", "family"],
-            ["variants", "manufacturers", "families"],
-        ):
-            self[n] = (base / (m + ".txt")).read_text().splitlines()
-            for p in ["train", "test", "val"]:
-                self[p + "_" + n] = (
-                    (base / f"images_{n}_{p}.txt").read_text().splitlines()
-                )
-                self[p + "_" + n] = [
-                    self[n].index(" ".join(i.split(" ")[1:])) for i in self[p + "_" + n]
-                ]
 
-        val_names = (base / "images_val.txt").read_text().splitlines()
-        train_names = (base / "images_train.txt").read_text().splitlines()
-        test_names = (base / "images_test.txt").read_text().splitlines()
+    def _split_generators(self, dl_manager):
+        archive_path = dl_manager.download_and_extract(
+            "https://www.robots.ox.ac.uk/~vgg/data/fgvc-aircraft/archives/fgvc-aircraft-2013b.tar.gz"
+        )
+        base_path = os.path.join(archive_path, "fgvc-aircraft-2013b", "data")
+        return [
+            datasets.SplitGenerator(
+                name=datasets.Split.TRAIN,
+                gen_kwargs={"base_dir": base_path, "split_file": "images_variant_train.txt"}
+            ),
+            datasets.SplitGenerator(
+                name=datasets.Split.TEST,
+                gen_kwargs={"base_dir": base_path, "split_file": "images_variant_test.txt"}
+            ),
+            datasets.SplitGenerator(
+                name=datasets.Split.VALIDATION,
+                gen_kwargs={"base_dir": base_path, "split_file": "images_variant_val.txt"}
+            )
+        ]
 
-        train_images, test_images, val_images = [], [], []
-        for images, names, desc in zip(
-            [train_images, test_images, val_images],
-            [train_names, test_names, val_names],
-            ["Train", "Test", "Val"],
-        ):
-            for name in tqdm(names, desc=f"{desc} images"):
-                images.append(base / "images" / f"{name}.jpg")
-        self["train_X"] = ImagePathsDataset(train_images)
-        self["test_X"] = ImagePathsDataset(test_images)
-        self["val_X"] = ImagePathsDataset(val_images)
-        self["train_y"] = self["train_variant"]
-        self["test_y"] = self["test_variant"]
-        self["val_y"] = self["val_variant"]
-        print(f"Dataset {self.name} loaded in {0:.2f}s.".format(time.time() - t0))
+    def _generate_examples(self, base_dir, split_file):
+        with open(os.path.join(base_dir, split_file), "r") as f:
+            for idx, line in enumerate(f):
+                parts = line.strip().split(maxsplit=1)
+                image_id = parts[0]
+                label = parts[1] if len(parts) > 1 else None
+                image_path = os.path.join(base_dir, 'images', f"{image_id}.jpg")
+                if os.path.exists(image_path):
+                    # Remove the bottom 20 pixels from the image to remove the copyright banner
+                    image = Image.open(image_path)
+                    cropped_image = image.crop((0, 0, image.width, image.height - 20))
+                    yield idx, {
+                        "image": cropped_image,
+                        "variant": label,
+                    }
+
+    @staticmethod
+    def _labels():
+        return [
+            "707-320", "727-200", "737-200", "737-300", "737-400", "737-500", "737-600",
+            "737-700", "737-800", "737-900", "747-100", "747-200", "747-300", "747-400",
+            "757-200", "757-300", "767-200", "767-300", "767-400", "777-200", "777-300",
+            "A300B4", "A310", "A318", "A319", "A320", "A321", "A330-200", "A330-300",
+            "A340-200", "A340-300", "A340-500", "A340-600", "A380", "ATR-42", "ATR-72",
+            "An-12", "BAE 146-200", "BAE 146-300", "BAE-125", "Beechcraft 1900",
+            "Boeing 717", "C-130", "C-47", "CRJ-200", "CRJ-700", "CRJ-900", "Cessna 172",
+            "Cessna 208", "Cessna 525", "Cessna 560", "Challenger 600", "DC-10", "DC-3",
+            "DC-6", "DC-8", "DC-9-30", "DH-82", "DHC-1", "DHC-6", "DHC-8-100",
+            "DHC-8-300", "DR-400", "Dornier 328", "E-170", "E-190", "E-195", "EMB-120",
+            "ERJ 135", "ERJ 145", "Embraer Legacy 600", "Eurofighter Typhoon",
+            "F-16A/B", "F/A-18", "Falcon 2000", "Falcon 900", "Fokker 100", "Fokker 50",
+            "Fokker 70", "Global Express", "Gulfstream IV", "Gulfstream V", "Hawk T1",
+            "Il-76", "L-1011", "MD-11", "MD-80", "MD-87", "MD-90", "Metroliner",
+            "Model B200", "PA-28", "SR-20", "Saab 2000", "Saab 340", "Spitfire",
+            "Tornado", "Tu-134", "Tu-154", "Yak-42"
+        ]
