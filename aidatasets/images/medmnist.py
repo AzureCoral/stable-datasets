@@ -9,6 +9,8 @@ class MedMNISTConfig(datasets.BuilderConfig):
 
 
 class MedMNIST(datasets.GeneratorBasedBuilder):
+    """MedMNIST, a large-scale MNIST-like collection of standardized biomedical images, including 12 datasets for 2D and 6 datasets for 3D.
+    """
     BUILDER_CONFIGS = [
         # 2D Datasets
         MedMNISTConfig(name="pathmnist", variant="pathmnist"),
