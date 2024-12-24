@@ -1,10 +1,9 @@
 import datasets
 from PIL import Image
 import zipfile
-import io
 
 
-class IBeans(datasets.GeneratorBasedBuilder):
+class Beans(datasets.GeneratorBasedBuilder):
     """Bean disease dataset for classification of three classes: Angular Leaf Spot, Bean Rust, and Healthy leaves."""
 
     VERSION = datasets.Version("1.0.0")
