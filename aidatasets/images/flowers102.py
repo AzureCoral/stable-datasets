@@ -21,7 +21,14 @@ class Flowers102(datasets.GeneratorBasedBuilder):
                 }
             ),
             supervised_keys=("image", "label"),
-            homepage="https://www.robots.ox.ac.uk/~vgg/data/flowers/102/"
+            homepage="https://www.robots.ox.ac.uk/~vgg/data/flowers/102/",
+            citation="""@inproceedings{nilsback2008flowers102,
+                         title={Automated flower classification over a large number of classes},
+                         author={Nilsback, Maria-Elena and Zisserman, Andrew},
+                         booktitle={2008 Sixth Indian conference on computer vision, graphics \& image processing},
+                         pages={722--729},
+                         year={2008},
+                         organization={IEEE}}""",
         )
 
     def _split_generators(self, dl_manager):
