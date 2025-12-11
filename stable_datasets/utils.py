@@ -1,627 +1,254 @@
-import numpy as np
-from multiprocessing import Pool, Queue, Lock, Process
-from scipy import ndimage
+import multiprocessing
 import os
-import urllib
-import requests
-import functools
-import shutil
-
-import hashlib
+import time
+from concurrent.futures import ProcessPoolExecutor
+from pathlib import Path
+from typing import Iterable, Union
+from urllib.parse import urlparse
+import datasets
+import numpy as np
+import pandas as pd
+import rich.progress
+from datasets import DownloadConfig
+from filelock import FileLock
+from loguru import logger as logging
+from requests_cache import CachedSession
+from rich.progress import (
+    BarColumn,
+    MofNCompleteColumn,
+    TextColumn,
+    TimeElapsedColumn,
+    TimeRemainingColumn,
+)
 from tqdm import tqdm
 
-import tarfile
-import zipfile
-import pathlib
-from pathlib import Path
-import pandas as pd
 
-import torch as ch
-from typing import Dict, Union
-from PIL import Image
-import time
-from torch.utils.data import Dataset as TorchDataset
+DEFAULT_CACHE_DIR = "~/.stable_datasets/"
 
 
-class Dataset(dict):
-    # def __getitem__(self, i):
-    #     return Image.open(list.__getitem__(self, i)).convert("RGB")
+def _default_dest_folder() -> Path:
+    """Default folder where files are saved."""
+    return Path(os.path.expanduser(DEFAULT_CACHE_DIR)) / "downloads"
 
-    def __init__(self, path=None, **kwargs):
-        if path is None:
-            if "AI_DATASETS_ROOT" not in os.environ:
-                raise ValueError("path can not be None unless AI_DATASETS_ROOT is set")
-            self._path = Path(os.environ["AI_DATASETS_ROOT"])
-        else:
-            self._path = Path(path)
-        for k, v in kwargs.items():
-            setattr(self, k, v)
 
-    @property
-    def md5(self):
-        return {}
+def _default_processed_cache_dir() -> Path:
+    """Default folder where processed datasets (Arrow files) are cached."""
+    return Path(os.path.expanduser(DEFAULT_CACHE_DIR)) / "processed"
 
-    @property
-    def path(self):
-        return self._path
 
-    @property
-    def extract(self):
+class StableDatasetBuilder(datasets.GeneratorBasedBuilder):
+    """
+    Base class for stable-datasets that enables direct dataset loading.
+    """
+
+    def __new__(cls, *args, split, cache_dir=None, **kwargs):
+        """
+        Automatically download, prepare, and return the dataset for the specified split.
+
+        Args:
+            split: Required dataset split to load (e.g., "train", "test", "validation").
+            cache_dir: Cache directory for processed datasets. If None, defaults to
+                ~/.stable_datasets/processed/.
+            **kwargs: Additional arguments passed to the dataset builder.
+
+        Returns:
+            Dataset: The loaded dataset for the specified split.
+        """
+        instance = super().__new__(cls)
+
+        # 1) Decide which cache_dir we're using
+        if cache_dir is None:
+            cache_dir = str(_default_processed_cache_dir())
+
+        # 2) Initialize builder with our cache_dir explicitly
+        #    This controls where *both* raw and processed data go.
+        instance.__init__(*args, cache_dir=cache_dir, **kwargs)
+
+        # 3) Explicitly tell HF to use our cache_dir for downloads
+        download_config = DownloadConfig(cache_dir=cache_dir)
+
+        instance.download_and_prepare(
+            download_config=download_config,
+        )
+
+        # 4) Load the split from the same cache_dir
+        result = instance.as_dataset(split=split)
+        return result
+
+
+def bulk_download(
+    urls: Iterable[str],
+    dest_folder: Union[str, Path, None] = None,
+    backend: str = "filesystem",
+    cache_dir: str = DEFAULT_CACHE_DIR,
+) -> list[Path]:
+    """
+    Download multiple files concurrently and return their local paths.
+
+    Args:
+        urls: Iterable of URL strings to download.
+        dest_folder: Destination folder for downloads. If None, defaults to
+            ~/.stable_datasets/downloads/.
+        backend: requests_cache backend (e.g. "filesystem").
+        cache_dir: Cache directory for requests_cache.
+
+    Returns:
+        list[Path]: Local file paths in the same order as the input URLs.
+    """
+    urls = list(urls)
+    num_workers = len(urls)
+    if num_workers == 0:
         return []
 
-    @property
-    def modalities(self):
-        return {}
+    if dest_folder is None:
+        dest_folder = _default_dest_folder()
+    dest_folder = Path(dest_folder)
+    dest_folder.mkdir(parents=True, exist_ok=True)
 
-    @property
-    def num_classes(self):
-        raise NotImplementedError("You need to define your own num_classes method")
+    filenames = [os.path.basename(urlparse(url).path) for url in urls]
+    results: list[Path] = []
 
-    @property
-    def name(self):
-        return type(self).__name__
+    with rich.progress.Progress(
+        TextColumn("[progress.description]{task.description}"),
+        BarColumn(),
+        MofNCompleteColumn(),
+        TextColumn("•"),
+        TimeElapsedColumn(),
+        TextColumn("•"),
+        TimeRemainingColumn(),
+        refresh_per_second=5,
+    ) as progress:
+        futures = []
+        with multiprocessing.Manager() as manager:
+            _progress = manager.dict()  # shared between worker processes
 
-    @property
-    def urls(self):
-        raise NotImplementedError("You need to define your own urls method")
+            with ProcessPoolExecutor(max_workers=num_workers) as executor:
+                # submit one download task per URL
+                for i in range(num_workers):
+                    task_id = filenames[i]
+                    future = executor.submit(
+                        download,
+                        urls[i],
+                        dest_folder,
+                        backend,
+                        cache_dir,
+                        False,      # disable per-file tqdm; Rich handles progress
+                        _progress,
+                        task_id,
+                    )
+                    futures.append(future)
 
-    @property
-    def num_samples(self):
-        raise NotImplementedError("You need to define your own num_samples method")
+                rich_tasks = {}
 
-    def __getitem__(self, key):
-        if key not in self:
-            raise ValueError(
-                f"{key} not present.... did you download/load the dataset first?"
-            )
-        return super().__getitem__(key)
+                # update Rich progress while downloads are running
+                while not all(f.done() for f in futures):
+                    for task_id in list(_progress.keys()):
+                        prog = _progress[task_id]
+                        if task_id not in rich_tasks:
+                            rich_tasks[task_id] = progress.add_task(
+                                f"[green]{task_id}",
+                                total=prog["total"],
+                                visible=True,
+                            )
+                        progress.update(
+                            rich_tasks[task_id],
+                            completed=prog["progress"],
+                        )
+                    time.sleep(0.01)
 
-    def download(self):
-        """dataset downlading utility"""
-        folder = self.path / self.name
-        folder.mkdir(parents=True, exist_ok=True)
-        for filename, url in self.urls.items():
-            download_url(url, folder / filename, self.md5.get(filename, None))
-            if filename in self.extract:
-                to = os.path.splitext(folder / ("extracted_" + filename))[0]
-                extract_file(folder / filename, to)
-        return self
+            # collect results in the same order as urls
+            for future in futures:
+                results.append(future.result())
 
-    @property
-    def load(self):
-        raise NotImplementedError("You need to define your own load method")
-
-    def enforce_RGB(self):
-        for name, modality in self.modalities.items():
-            if modality == "image":
-                if isinstance(self[name], np.ndarray):
-                    if self[name].shape[-1] == 1:
-                        print(f"enforcing Grayscale -> RGB for {name}")
-                        self[name] = np.repeat(self[name], 3, axis=-1)
-                    elif self[name].ndim == 3:
-                        print(f"enforcing Grayscale -> RGB for {name}")
-                        self[name] = np.repeat(self[name][..., None], 3, axis=-1)
-
-                else:
-                    print(f"enforcing RGB for {name}")
-                    self[name] = [x.convert("RGB") for x in self[name]]
+    return results
 
 
-def as_tuple(x, N, t=None):
+def download(
+    url: str,
+    dest_folder: Union[str, Path, None] = None,
+    backend: str = "filesystem",
+    cache_dir: str = DEFAULT_CACHE_DIR,
+    progress_bar: bool = True,
+    _progress_dict=None,
+    _task_id=None,
+) -> Path:
     """
-    Coerce a value to a tuple of given length (and possibly given type).
-    Parameters
-    ----------
-    x : value or iterable
-    N : integer
-        length of the desired tuple
-    t : type or tuple of type, optional
-        required type or types for all elements
-    Returns
-    -------
-    tuple
-        ``tuple(x)`` if `x` is iterable, ``(x,) * N`` otherwise.
-    Raises
-    ------
-    TypeError
-        if `type` is given and `x` or any of its elements do not match it
-    ValueError
-        if `x` is iterable, but does not have exactly `N` elements
+    Download a single file from a URL with caching and optional progress tracking.
+
+    Args:
+        url: URL to download from.
+        dest_folder: Destination folder for the downloaded file. If None,
+            defaults to ~/.stable_datasets/downloads/.
+        backend: requests_cache backend (e.g. "filesystem").
+        cache_dir: Cache directory for requests_cache.
+        progress_bar: Whether to show a tqdm progress bar (for standalone use).
+        _progress_dict: Internal shared dict for bulk_download progress reporting.
+        _task_id: Internal task ID key for bulk_download progress reporting.
+
+    Returns:
+        Path: Local path to the downloaded file.
+
+    Raises:
+        Exception: Any exception from network/file operations is logged and re-raised.
     """
     try:
-        X = tuple(x)
-    except TypeError:
-        X = (x,) * N
-
-    if (t is not None) and not all(isinstance(v, t) for v in X):
-        if t == int_types:
-            expected_type = "int"  # easier to understand
-        elif isinstance(t, tuple):
-            expected_type = " or ".join(tt.__name__ for tt in t)
-        else:
-            expected_type = t.__name__
-        raise TypeError(
-            "expected a single value or an iterable "
-            "of {0}, got {1} instead".format(expected_type, x)
-        )
-
-    if len(X) != N:
-        raise ValueError(
-            "expected a single value or an iterable "
-            "with length {0}, got {1} instead".format(N, x)
-        )
-
-    return X
-
-
-def to_numeric_classes(values):
-    return np.argmax(values[:, None] == np.unique(values), 1)
-
-
-def create_cmap(values, colors):
-    from matplotlib.pyplot import Normalize
-    import matplotlib
-
-    norm = Normalize(min(values), max(values))
-    tuples = list(zip(map(norm, values), colors))
-    cmap = matplotlib.colors.LinearSegmentedColormap.from_list("", tuples)
-    return cmap, norm
-
-
-def m4a_to_wav(filename):
-    m4a_file = "20211210_151013.m4a"
-    wav_filename = r"F:\20211210_151013.wav"
-    from pydub import AudioSegment
-
-    track = AudioSegment.from_file(m4a_file, format="m4a")
-    file_handle = track.export(wav_filename, format="wav")
-
-
-def patchify_1d(x, window_length, stride):
-    """extract patches from a numpy array
-
-    Parameters
-    ----------
-
-    x: array-like
-        the input data to extract patches from, any shape, the last dimension
-        is the one being patched
-
-    window_length: int
-        the length of the patches
-
-    stride: int
-        the amount of stride (bins separating two consecutive patches
-
-    Returns
-    -------
-
-    x_patches: array-like
-        the number of patches is put in the pre-last dimension (-2)
-    """
-
-    n_windows = (x.shape[-1] - window_length) // stride + 1
-    new_x = np.empty(x.shape[:-1] + (n_windows, window_length))
-    for n in range(n_windows):
-        new_x[..., n, :] = x[..., n * stride : n * stride + window_length]
-    return new_x
-
-
-def patchify_2d(x, window_length, stride):
-    # TODO
-    return None
-
-
-def train_test_split(*args, train_size=0.8, stratify=None, seed=None):
-    """split given data into two non overlapping sets
-
-    Parameters
-    ----------
-
-    *args: inputs
-        the sets to be split by the function
-
-    train_size: scalar
-        the amount of data to put in the first set, either an integer value
-        being the actual number of data to keep, or a ratio (0 to 1 number)
-
-    stratify: array (optional)
-        the optimal stratify guide to spit the array s.t. the same proportion
-        based on the stratify array is kep in both set based on the proportion
-        of the split
-
-    seed: integer (optional)
-        the seed for the random number generator for reproducibility
-
-    Returns
-    -------
-
-    train_set: list
-        returns the train data, the list has the members of *args split
-
-    test_set: list
-        returns the test data, the list has the members of *args split
-
-    Example
-    -------
-
-    .. code-block:: python
-
-       x = numpy.random.randn(100, 4)
-       y = numpy.random.randn(100)
-
-       train, test = train_test_split(x, y, train_size=0.5)
-       print(train[0].shape, train[1].shape)
-       # (50, 4) (50,)
-       print(test[0].shape, test[1].shape)
-       # (50, 4) (50,)
-
-
-    """
-    if stratify is not None:
-        train_indices = list()
-        test_indices = list()
-        for c in set(list(stratify)):
-            c_indices = np.where(stratify == c)[0]
-            np.random.RandomState(seed=seed).shuffle(c_indices)
-            if train_size > 1:
-                cutoff = train_size
-            else:
-                cutoff = int(len(c_indices) * train_size)
-            train_indices.append(c_indices[:cutoff])
-            test_indices.append(c_indices[cutoff:])
-        train_indices = np.concatenate(train_indices, 0)
-        test_indices = np.concatenate(test_indices, 0)
-    else:
-        indices = np.random.RandomState(seed=seed).permutation(len(args[0]))
-        if train_size > 1:
-            assert type(train_size) == int
-            cutoff = train_size
-        else:
-            cutoff = int(len(args[0]) * train_size)
-        print(cutoff)
-        train_indices = indices[:cutoff]
-        test_indices = indices[cutoff:]
-    train_set = [arg[train_indices] for arg in args]
-    test_set = [arg[test_indices] for arg in args]
-    if len(args) == 1:
-        return train_set[0], test_set[0]
-    return train_set, test_set
-
-
-class batchify:
-    def __init__(
-        self,
-        *args,
-        batch_size,
-        option="random",
-        load_func=None,
-        extra_process=0,
-        n_batches=None,
-    ):
-        """generator to iterate though mini-batches
-
-        Parameters
-        ----------
-
-        load_func: None or list of func
-            same length as the number of args. A function is called on a single
-            datum and it can be used to apply some normalization but its main
-            goal is to load files if the args were list of filenames
-
-        extra_processes: int (optional)
-            if there is no load_func then extra process is useless
-
-        n_batches: int (optional)
-            the number of batches to produce, only used if option is random, if
-            not given it is taken to be the length of the data divided by the
-            batch_size
-
-        Returns
-        -------
-
-        *batch_args: list
-            the iterator containing the batch values
-            of each arg in args
-
-        Example
-        -------
-
-        .. code-block:: python
-
-        for x, y in batchify(X, Y):
-            train(x, y)
-
-        """
-
-        self.n_batches = n_batches or len(args[0]) // batch_size
-        self.args = args
-        self.start_index = 0
-        self.option = option
-        self.batch_size = batch_size
-        self.extra_process = extra_process
-        self.terminate = False
-
-        if option == "random_see_all":
-            self.permutation = np.random.permutation(len(args[0]))
-
-        # set up load function
-        if load_func is None:
-            self.load_func = (None,) * len(args)
-        else:
-            self.load_func = []
-            for i in range(len(load_func)):
-                if load_func[i] is None:
-                    self.load_func.append(None)
-                elif extra_process == 0:
-
-                    def fn(args, queue, f=load_func[i]):
-                        result = np.asarray([f(arg) for arg in args])
-                        queue.put(result)
-
-                    self.load_func.append(fn)
-                else:
-
-                    def fn(lock, data, queue, f=load_func[i]):
-                        lock.acquire()
-                        with Pool(processes=extra_process) as pool:
-                            result = pool.map(f, data)
-                        queue.put(np.asarray(result))
-                        lock.release()
-
-                    self.load_func.append(fn)
-        assert np.prod([len(args[0]) == len(arg) for arg in args[1:]])
-
-        self.queues = [Queue() for f in self.load_func]
-        self.locks = [Lock() for f in self.load_func]
-
-        # launch the first batch straight away
-        batch = self.get_batch()
-        self.launch_process(batch)
-
-    def chunk(self, items, n):
-        for i in range(0, len(items), n):
-            yield items[i : i + n]
-
-    def launch_process(self, batch):
-        for b, lock, load_func, queue in zip(
-            batch, self.locks, self.load_func, self.queues
-        ):
-            if load_func is None:
-                queue.put(b)
-            elif load_func is not None and self.extra_process == 0:
-                load_func(b, queue)
-            elif load_func is not None and self.extra_process > 0:
-                # first chunk for each process and launch a process
-                p = Process(target=load_func, args=(lock, b, queue))
-                p.start()
-
-    def __iter__(self):
-        return self
-
-    def get_batch(self):
-        indices = (self.start_index, self.start_index + self.batch_size)
-
-        # check if we exhausted the samples
-        if self.option == "random":
-            if indices[1] > self.batch_size * self.n_batches:
-                raise StopIteration()
-        elif indices[1] > len(self.args[0]):
-            raise StopIteration()
-
-        # proceed to get the data
-        if self.option == "random_see_all":
-            perm = self.permutation[indices[0] : indices[1]]
-            batch = [
-                arg[perm] if hasattr(arg, "shape") else [arg[i] for i in perm]
-                for arg in self.args
-            ]
-        elif self.option == "continuous":
-            batch = [arg[indices[0] : indices[1]] for arg in self.args]
-        elif self.option == "random":
-            perm = np.random.randint(0, len(self.args[0]), self.batch_size)
-            batch = [
-                arg[perm] if hasattr(arg, "shape") else [arg[i] for i in perm]
-                for arg in self.args
-            ]
-        return batch
-
-    def __next__(self):
-        if self.terminate:
-            raise StopIteration()
-
-        # we prepare the next batch if possible
-        try:
-            self.start_index += self.batch_size
-            batch = self.get_batch()
-            self.launch_process(batch)
-        except StopIteration:
-            self.terminate = True
-
-        if len(self.queues) == 1:
-            return self.queues[0].get()
-        else:
-            return tuple([queue.get() for queue in self.queues])
-
-    def apply_func(self, batch):
-        # now check if needs to apply a load func
-        for i, load_func in enumerate(self.load_func):
-            if load_func is not None:
-                batch[i] = load_func(batch[i])
-
-
-def resample_images(
-    images,
-    target_shape,
-    ratio="same",
-    order=1,
-    mode="nearest",
-    data_format="channels_first",
-):
-    if data_format == "channels_first":
-        output_images = np.zeros(
-            (len(images), images[0].shape[0]) + target_shape,
-            dtype=images[0].dtype,
-        )
-    else:
-        output_images = np.zeros(
-            (len(images),) + target_shape + (images[0].shape[-1],),
-            dtype=images[0].dtype,
-        )
-
-    for i, image in enumerate(images):
-        # the first step is to resample to fit it into the target shape
-        if data_format != "channels_first":
-            image = image.transpose(2, 0, 1)
-
-        if ratio == "same":
-            width_change = target_shape[1] / image.shape[2]
-            height_change = target_shape[0] / image.shape[1]
-            change = min(width_change, height_change)
-        x = np.linspace(0, image.shape[1] - 1, int(image.shape[1] * change))
-        y = np.linspace(0, image.shape[2] - 1, int(image.shape[2] * change))
-        coordinates = np.stack(np.meshgrid(x, y))
-        coordinates = np.stack([coordinates[0].reshape(-1), coordinates[1].reshape(-1)])
-
-        new_image = np.stack(
-            [
-                ndimage.map_coordinates(channel, coordinates, order=order, mode=mode)
-                .reshape((len(y), len(x)))
-                .T
-                for channel in image
-            ]
-        )
-        # now we position this image into the output
-        middle_height = (target_shape[0] - len(x)) // 2
-        middle_width = (target_shape[1] - len(y)) // 2
-        if data_format != "channels_first":
-            output_images[
-                i,
-                middle_height : middle_height + len(x),
-                middle_width : middle_width + len(y),
-                :,
-            ] = new_image.transpose(1, 2, 0)
-        else:
-            output_images[
-                i,
-                :,
-                middle_height : middle_height + len(x),
-                middle_width : middle_width + len(y),
-            ] = new_image
-    return output_images
-
-
-def download_url(url: str, filename: str, md5_checksum: str = None):
-    if "drive.google.com" in url:
-        import gdown
-
-        gdown.download(url, str(filename), quiet=False)
-        return
-
-    target = Path(filename).expanduser().resolve()
-    target.parent.mkdir(parents=True, exist_ok=True)
-    start = 0
-    if target.is_file():
-        if md5_checksum is not None and checksum(target, md5_checksum):
-            print(f"{filename} already downloaded with valid checksum")
-            return
-        else:
-            start = target.stat().st_size
-    r = requests.get(
-        url,
-        headers={"Range": f"bytes={start}-"},
-        stream=True,
-        verify=False,
-        allow_redirects=True,
-    )
-    file_size = int(r.headers.get("Content-Length", 0))
-
-    if file_size and file_size == start:
-        print(
-            f"File {filename} was already downloaded from URL {url} and has right size"
-        )
-    elif file_size and start > file_size:
-        print("File is bigger than expected...")
-    else:
-        try:
-            os.open(str(target) + ".lock", os.O_CREAT | os.O_EXCL)
-            desc = str(target)
-            if file_size == 0:
-                desc += " (Unknown total file size)"
-            else:
-                desc += f" ({file_size}b)"
-            r.raw.read = functools.partial(r.raw.read, decode_content=True)
-            with tqdm.wrapattr(r.raw, "read", total=file_size, desc=desc) as r_raw:
-                with target.open("wb" if start == 0 else "ab") as f:
-                    shutil.copyfileobj(r_raw, f)
-            os.remove(str(target) + ".lock")
-        except Exception as e:
-            print(e)
-            while os.path.isfile(str(target) + ".lock"):
-                print(f"waiting for {target.name} to be downloaded by another process")
-                time.sleep(1)
-
-    if md5_checksum is None:
-        current = hashlib.md5(open(target, "rb").read()).hexdigest()
-        print(f"A md5 checksum was not given, please use {current} for {target}")
-    else:
-        assert checksum(target, md5_checksum)
-        print("Downloaded file matches given md5 checksum")
-
-
-def checksum(target, md5):
-    observed = hashlib.md5(open(target, "rb").read()).hexdigest()
-    if observed == md5:
-        return True
-    else:
-        print(f"Expected {md5} but is {observed}")
-
-
-def track_progress(members, total):
-    for member in tqdm(members, total=total, desc="Extracting..."):
-        yield member
-
-
-def extract_file(filename, target):
-    if os.path.isfile(str(target) + ".done"):
-        print("already extracted")
-        return
-    ext = pathlib.Path(filename).suffix
-    try:
-        os.open(str(target) + ".lock", os.O_CREAT | os.O_EXCL)
-        if Path(target).is_dir():
-            print("Already extracted (but not verified) leaving")
-            return
-        if ext in [".tgz", ".tar"] or str(filename)[-7:] == ".tar.gz":
-            tgz = ext == ".tgz" or str(filename)[-7:] == ".tar.gz"
-            with tarfile.open(filename, "r:gz" if tgz else "r") as tarball:
-                tarball.extractall(path=target, members=track_progress(tarball, None))
-        elif ext == ".zip":
-            with zipfile.ZipFile(filename) as zip_file:
-                for member in tqdm(zip_file.namelist(), desc="Extracting "):
-                    if os.path.exists(target + r"/" + member) or os.path.isfile(
-                        target + r"/" + member
-                    ):
+        if dest_folder is None:
+            dest_folder = _default_dest_folder()
+        dest_folder = Path(dest_folder)
+        dest_folder.mkdir(parents=True, exist_ok=True)
+
+        filename = os.path.basename(urlparse(url).path)
+        local_filename = dest_folder / filename
+        lock_filename = dest_folder / f"{filename}.lock"
+
+        # prevent concurrent downloads of the same file
+        with FileLock(lock_filename):
+            session = CachedSession(cache_dir, backend=backend)
+            logging.info(f"Downloading: {url}")
+
+            head = session.head(url)
+            total_size = int(head.headers.get("content-length", 0) or 0)
+            logging.info(f"Total size: {total_size} bytes")
+
+            response = session.get(url, stream=True)
+            downloaded = 0
+
+            with (
+                open(local_filename, "wb") as f,
+                tqdm(
+                    desc=local_filename.name,
+                    total=total_size or None,  # None if size unknown
+                    unit="B",
+                    unit_scale=True,
+                    unit_divisor=1024,
+                    disable=not progress_bar,
+                ) as bar
+            ):
+                for chunk in response.iter_content(chunk_size=8192):
+                    if not chunk:
                         continue
-                    zip_file.extract(member, target)
-        os.remove(str(target) + ".lock")
-        os.open(str(target) + ".done", os.O_CREAT)
+                    f.write(chunk)
+                    downloaded += len(chunk)
+                    bar.update(len(chunk))
+
+                    if _progress_dict is not None and _task_id is not None:
+                        _progress_dict[_task_id] = {
+                            "progress": downloaded,
+                            "total": total_size,
+                        }
+
+            if total_size and downloaded != total_size:
+                logging.error(
+                    f"Download incomplete: got {downloaded} of {total_size} bytes for {url}"
+                )
+            else:
+                logging.info(f"Download finished: {local_filename}")
+
+            return local_filename
+
     except Exception as e:
-        print(e)
-        while os.path.isfile(str(target) + ".lock"):
-            print(f"{filename} already being extracted, waiting...")
-            time.sleep(3)
-
-
-def tolist_recursive(array):
-    if isinstance(array, np.ndarray):
-        return tolist_recursive(array.tolist())
-    elif isinstance(array, list):
-        return [tolist_recursive(item) for item in array]
-    elif isinstance(array, tuple):
-        return tuple(tolist_recursive(item) for item in array)
-    else:
-        return array
+        logging.error(f"Error downloading {url}: {e}")
+        raise e
 
 
 def load_from_tsfile_to_dataframe(
@@ -1201,104 +828,3 @@ def load_from_tsfile_to_dataframe(
             return data
     else:
         raise IOError("empty file")
-
-
-@ch.jit.script
-def base_two(x: ch.Tensor, bits: int):
-    with ch.no_grad():
-        mask = 2 ** ch.arange(bits).to(x.device, x.dtype)
-        return x.view(-1, 1).bitwise_and(mask).ne_(0).byte()
-
-
-class TensorDataset(TorchDataset):
-    def __init__(self, X, y, transform=None):
-        self.X = X
-        self.y = y
-        self.transform = transform
-
-    def __getitem__(self, index):
-        X, y = self.X[index], self.y[index]
-        if self.transform:
-            X = self.transform(X)
-        return X, y
-
-    def __len__(self):
-        return len(self.X)
-
-
-def dataset_to_lightning(
-    train,
-    val=None,
-    test=None,
-    num_workers=0,
-    create_val=0,
-    train_transform=None,
-    val_transform=None,
-    test_transform=None,
-    **kwargs,
-):
-    import lightning.pytorch as pl
-
-    class DataModule(pl.LightningDataModule):
-        def __init__(
-            self,
-            fn,
-            path,
-            batch_size,
-            create_val,
-            num_workers,
-        ):
-            super().__init__()
-            self.fn = fn
-            self.path = path
-            self.batch_size = batch_size
-            self.create_val = create_val
-            self.num_workers = num_workers
-            self.train_transform = train_transform
-            self.val_transform = val_transform
-            self.test_transform = test_transform
-
-        def setup(self, stage: str):
-            if hasattr(self, "train"):
-                return
-            dataset = self.fn(self.path)
-            self.train = MyDataset(
-                dataset["train"]["X"],
-                dataset["train"]["y"],
-                transform=self.train_transform,
-            )
-            if val:
-                self.val = MyDataset(
-                    dataset["val"]["X"],
-                    dataset["val"]["y"],
-                    transform=self.val_transform,
-                )
-            if "test" in dataset.keys():
-                self.test = MyDataset(
-                    dataset["test"]["X"],
-                    dataset["test"]["y"],
-                    transform=self.val_transform,
-                )
-
-        def train_dataloader(self):
-            return DataLoader(
-                self.train,
-                batch_size=self.batch_size,
-                drop_last=True,
-                shuffle=True,
-                num_workers=self.num_workers,
-                persistent_workers=self.num_workers > 0,
-            )
-
-        def val_dataloader(self):
-            return DataLoader(self.val, batch_size=self.batch_size)
-
-        def test_dataloader(self):
-            return DataLoader(self.test, batch_size=self.batch_size)
-
-        def predict_dataloader(self):
-            return DataLoader(self.predict, batch_size=self.batch_size)
-
-    return DataModule(
-        fn, path, batch_size, create_val, num_workers, train_transform, val_transform
-    )
