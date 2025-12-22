@@ -15,6 +15,7 @@ from .cifar100 import CIFAR100
 # from .cifar100 import CIFAR100
 from .cifar100_c import CIFAR100C
 from .dtd import DTD
+from .fashion_mnist import FashionMNIST
 from .k_mnist import KMNIST
 from .med_mnist import MedMNIST
 
@@ -46,6 +47,7 @@ __all__ = [
     "CIFAR100",
     "CIFAR10C",
     "CIFAR100C",
+    "FashionMNIST",
     "KMNIST",
     "MedMNIST",
     "Cars196",
