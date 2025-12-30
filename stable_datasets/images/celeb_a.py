@@ -5,6 +5,9 @@ import datasets
 import pandas as pd
 from PIL import Image
 from tqdm import tqdm
+from utils import download
+
+from stable_datasets.utils import BaseDatasetBuilder
 
 
 try:
@@ -16,13 +19,35 @@ except ImportError:
     import gdown
 
 
-class CelebA(datasets.GeneratorBasedBuilder):
+class CelebA(BaseDatasetBuilder):
     """
     The CelebA dataset is a large-scale face attributes dataset with more than 200K celebrity images,
     each with 40 attribute annotations.
     """
 
     VERSION = datasets.Version("1.0.0")
+
+    IMG_ID = "0B7EVK8r0v71pZjFTYXZWM3FlRnM"
+    ATTR_ID = "0B7EVK8r0v71pblRyaVFSWGxPY0U"
+    PARTITION_ID = "0B7EVK8r0v71pY0NSMzRuSXJEVkk"
+
+    GOOGLE_DRIVE_URL = "https://drive.google.com/uc?export=download&id={}"
+
+    SOURCE = {
+        "homepage": "https://mmlab.ie.cuhk.edu.hk/projects/CelebA.html",
+        "assets": {
+            "images": GOOGLE_DRIVE_URL.format(IMG_ID),
+            "attributes": GOOGLE_DRIVE_URL.format(ATTR_ID),
+            "partition": GOOGLE_DRIVE_URL.format(PARTITION_ID),
+        },
+        "citation": """@inproceedings{liu2015faceattributes,
+                    title     = {Deep Learning Face Attributes in the Wild},
+                    author    = {Liu, Ziwei and Luo, Ping and Wang, Xiaogang and Tang, Xiaoou},
+                    booktitle = {Proceedings of International Conference on Computer Vision (ICCV)},
+                    month     = {December},
+                    year      = {2015} }
+                    """,
+    }
 
     def _info(self):
         return datasets.DatasetInfo(
@@ -35,24 +60,19 @@ class CelebA(datasets.GeneratorBasedBuilder):
                 }
             ),
             supervised_keys=("image", "attributes"),
-            homepage="http://mmlab.ie.cuhk.edu.hk/projects/CelebA.html",
-            citation="""@inproceedings{liu2015faceattributes,
-                         title = {Deep Learning Face Attributes in the Wild},
-                         author = {Liu, Ziwei and Luo, Ping and Wang, Xiaogang and Tang, Xiaoou},
-                         booktitle = {Proceedings of International Conference on Computer Vision (ICCV)},
-                         month = {December},
-                         year = {2015}}""",
+            homepage=self.SOURCE["homepage"],
+            citation=self.SOURCE["citation"],
         )
 
     def _split_generators(self, dl_manager):
         # Define a manual cache directory path
-        cache_dir = Path.home() / ".cache/huggingface/datasets/celebA"
+        cache_dir = Path.home() / ".stable_datasets/processed/celebA"
         cache_dir.mkdir(parents=True, exist_ok=True)
 
         # Google Drive file IDs
-        archive_id = "0B7EVK8r0v71pZjFTYXZWM3FlRnM"
-        attr_id = "0B7EVK8r0v71pblRyaVFSWGxPY0U"
-        partition_id = "0B7EVK8r0v71pY0NSMzRuSXJEVkk"
+        #        archive_id = "0B7EVK8r0v71pZjFTYXZWM3FlRnM"
+        #        attr_id = "0B7EVK8r0v71pblRyaVFSWGxPY0U"
+        #        partition_id = "0B7EVK8r0v71pY0NSMzRuSXJEVkk"
 
         # Define file paths in the cache directory
         archive_path = cache_dir / "img_align_celeba.zip"
@@ -61,15 +81,11 @@ class CelebA(datasets.GeneratorBasedBuilder):
 
         # Download files using gdown to the cache directory
         if not archive_path.exists():
-            gdown.download(
-                f"https://drive.google.com/uc?export=download&id={archive_id}", str(archive_path), quiet=False
-            )
+            download("https://cseweb.ucsd.edu/~weijian/static/datasets/celeba/img_align_celeba.zip", cache_dir)
         if not attr_path.exists():
-            gdown.download(f"https://drive.google.com/uc?export=download&id={attr_id}", str(attr_path), quiet=False)
+            gdown.download("https://drive.google.com/uc?export=download&id=0B7EVK8r0v71pblRyaVFSWGxPY0U", cache_dir)
         if not partition_path.exists():
-            gdown.download(
-                f"https://drive.google.com/uc?export=download&id={partition_id}", str(partition_path), quiet=False
-            )
+            gdown.download("https://drive.google.com/uc?export=download&id=0B7EVK8r0v71pY0NSMzRuSXJEVkk", cache_dir)
 
         return [
             datasets.SplitGenerator(
