@@ -43,7 +43,7 @@ def test_celeb_a_dataset():
     )
 
     # Test 6: Load and validate validation split
-    celeb_a_val = CelebA(split="valid")
+    celeb_a_val = CelebA(split="validation")
     expected_num_val_samples = 19867
     assert len(celeb_a_val) == expected_num_val_samples, (
         f"Expected {expected_num_val_samples} validation samples, got {len(celeb_a_val)}."

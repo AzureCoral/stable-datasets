@@ -5,7 +5,6 @@ import datasets
 import pandas as pd
 from PIL import Image
 from tqdm import tqdm
-from utils import download
 
 from stable_datasets.utils import BaseDatasetBuilder
 
@@ -70,9 +69,9 @@ class CelebA(BaseDatasetBuilder):
         cache_dir.mkdir(parents=True, exist_ok=True)
 
         # Google Drive file IDs
-        #        archive_id = "0B7EVK8r0v71pZjFTYXZWM3FlRnM"
-        #        attr_id = "0B7EVK8r0v71pblRyaVFSWGxPY0U"
-        #        partition_id = "0B7EVK8r0v71pY0NSMzRuSXJEVkk"
+        archive_id = "0B7EVK8r0v71pZjFTYXZWM3FlRnM"
+        attr_id = "0B7EVK8r0v71pblRyaVFSWGxPY0U"
+        partition_id = "0B7EVK8r0v71pY0NSMzRuSXJEVkk"
 
         # Define file paths in the cache directory
         archive_path = cache_dir / "img_align_celeba.zip"
@@ -81,11 +80,15 @@ class CelebA(BaseDatasetBuilder):
 
         # Download files using gdown to the cache directory
         if not archive_path.exists():
-            download("https://cseweb.ucsd.edu/~weijian/static/datasets/celeba/img_align_celeba.zip", cache_dir)
+            gdown.download(
+                f"https://drive.google.com/uc?export=download&id={archive_id}", str(archive_path), quiet=False
+            )
         if not attr_path.exists():
-            gdown.download("https://drive.google.com/uc?export=download&id=0B7EVK8r0v71pblRyaVFSWGxPY0U", cache_dir)
+            gdown.download(f"https://drive.google.com/uc?export=download&id={attr_id}", str(attr_path), quiet=False)
         if not partition_path.exists():
-            gdown.download("https://drive.google.com/uc?export=download&id=0B7EVK8r0v71pY0NSMzRuSXJEVkk", cache_dir)
+            gdown.download(
+                f"https://drive.google.com/uc?export=download&id={partition_id}", str(partition_path), quiet=False
+            )
 
         return [
             datasets.SplitGenerator(

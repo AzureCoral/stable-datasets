@@ -4,13 +4,29 @@ import tarfile
 import datasets
 from PIL import Image
 
+from stable_datasets.utils import BaseDatasetBuilder
 
-class Places365Small(datasets.GeneratorBasedBuilder):
+
+class Places365Small(BaseDatasetBuilder):
     """
     The Places365-Standard dataset (small version) for image classification.
     """
 
     VERSION = datasets.Version("1.0.0")
+
+    SOURCE = {
+        "homepage": "http://places2.csail.mit.edu/",
+        "assets": {
+            "train": "http://data.csail.mit.edu/places/places365/train_256_places365standard.tar",
+            "val": "http://data.csail.mit.edu/places/places365/val_256.tar",
+            "devkit": "http://data.csail.mit.edu/places/places365/filelist_places365-standard.tar",
+        },
+        "citation": """@article{zhou2017places,
+                        title={Places: A 10 million Image Database for Scene Recognition},
+                        author={Zhou, Bolei and Lapedriza, Agata and Khosla, Aditya and Oliva, Aude and Torralba, Antonio},
+                        year={2017}}
+        """,
+    }
 
     def _info(self):
         return datasets.DatasetInfo(
@@ -25,29 +41,10 @@ class Places365Small(datasets.GeneratorBasedBuilder):
                 }
             ),
             supervised_keys=("image", "label"),
-            homepage="http://places2.csail.mit.edu/",
+            homepage=self.SOURCE["homepage"],
             license="MIT License",
-            citation="""@article{zhou2017places,
-                         title={Places: A 10 million Image Database for Scene Recognition},
-                         author={Zhou, Bolei and Lapedriza, Agata and Khosla, Aditya and Oliva, Aude and Torralba, Antonio},
-                         year={2017}}
-            """,
+            citation=self.SOURCE["citation"],
         )
-
-    def _split_generators(self, dl_manager):
-        train_path = dl_manager.download("http://data.csail.mit.edu/places/places365/train_256_places365standard.tar")
-        val_path = dl_manager.download("http://data.csail.mit.edu/places/places365/val_256.tar")
-        devkit_path = dl_manager.download("http://data.csail.mit.edu/places/places365/filelist_places365-standard.tar")
-        return [
-            datasets.SplitGenerator(
-                name=datasets.Split.TRAIN,
-                gen_kwargs={"archive_path": train_path, "split": "train"},
-            ),
-            datasets.SplitGenerator(
-                name=datasets.Split.VALIDATION,
-                gen_kwargs={"archive_path": val_path, "split": "val", "devkit_path": devkit_path},
-            ),
-        ]
 
     def _generate_examples(self, archive_path, split, devkit_path=None):
         with tarfile.open(archive_path, "r") as tar:
